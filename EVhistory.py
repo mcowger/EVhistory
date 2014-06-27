@@ -4,14 +4,22 @@ from redis import StrictRedis
 import requests
 import json
 import time
+import os
+
+
+rediscloud_service = json.loads(os.environ['VCAP_SERVICES'])['rediscloud-n/a'][0]
+credentials = rediscloud_service['credentials']
+cp_credentials = json.loads(os.environ['VCAP_APPLICATION'])['chargepoint'][0]
 
 
 redis_db = None
-redis_password = 'y2ZUe3caAMG3LSMx'
-redis_host = 'pub-redis-16505.us-east-1-3.4.ec2.garantiadata.com'
-redis_port = 16505
-cp_user = 'matt@cowger.us'
-cp_pass = 'Habloo12'
+redis_password = credentials['password']
+redis_host = credentials['hostname']
+redis_port =  port=credentials['port']
+
+cp_user = cp_credentials['user']
+cp_pass = cp_credentials['pass']
+
 site="vmware"
 debug=False
 
