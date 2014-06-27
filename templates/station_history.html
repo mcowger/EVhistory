@@ -25,22 +25,13 @@
     </div>
     <div class="row">
       <div class="col-md-12 text-center">
-        <div class="btn-group">
 
-            {% for name,info in counts.items() %}
+          <figure>
+          {% autoescape false %}
+              {{ svg }}
+          {% endautoescape %}
+          </figure>
 
-                <a href="/averages" class="active btn
-                {% if info.available > 0 %}
-                btn-success
-                {%  else %}
-                brn-danger
-                {% endif %}
-                "> {{ name }}<br/>({{ info.available }}/{{info.total}}) </a>
-
-            {% endfor %}
-
-        </div>
-      <p>(available / total)</p>
       </div>
     </div>
     <div class="row">
@@ -51,8 +42,6 @@
     <div class="row">
       <div class="col-md-12">
           <p class="text-center">last updated: {{ updated }}</p>
-          <p class="text-center">server time:  {{ currenttime }}</p>
-
         <p class="text-center">by matt cowger (@mcowger)</p>
       </div>
     </div>

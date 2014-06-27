@@ -6,3 +6,5 @@ itsdangerous==0.24
 redis==2.10.1
 requests==2.3.0
 APScheduler==2.1.2
+pygal==1.4.6
+lxml==3.3.5

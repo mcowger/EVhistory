@@ -10,6 +10,7 @@ import pprint
 from collections import OrderedDict
 import datetime
 from apscheduler.scheduler import Scheduler
+import pygal
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -145,6 +146,8 @@ def rollup_current_data():
         ports_count_add = record['station_info']['port_count']
         counts[garage_long]['total'] += ports_count_add
         counts[garage_long]['available'] += ports_available_add
+    r.lpush("averages",json.dumps( {'timestamp': int(time.time()), 'data':counts}))
+    r.ltrim("average",0,1000)
     return counts
 
 def update_sites():
@@ -157,24 +160,91 @@ def update_sites():
         station_info = get_stations_info(location=site)
         station_data = get_state(station_info,filter=site)
         push_data_to_db(station_data)
+    rollup_current_data()
     r.set('lastcheck',timestamp)
 
+def humantime(timestamp):
+    assert timestamp > 0
+    return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @app.route('/')
 def dashboard():
-
-
     counts=rollup_current_data()
-    humantime = datetime.datetime.fromtimestamp(int(r.get("lastcheck"))).strftime("%Y-%m-%d %H:%M:%S")
-    return render_template("default.html",counts=counts,updated=humantime)
+
+    if int(r.time()[0]) - int(r.get("lastcheck")) > 600:
+        update_sites()
+
+    updated = humantime(int(r.get("lastcheck")))
+    current = humantime(int(r.time()[0]))
+
+    return render_template("default.html",counts=counts,updated=updated,currenttime=current)
+
+
+@app.route('/averages')
+def average_history():
+    values = r.lrange("averages",0,99)
+    line = pygal.Line(
+        disable_xml_declaration=True,
+        style=pygal.style.NeonStyle,
+        y_title = "% Availability Plugs",
+        x_label_rotation = 80,
+        range=(0,100)
+    )
+    line.title = "Availability History for Garages "
+    timestamps = []
+    locations = {}
+    for record in reversed(values):
+        record = record.decode()
+        record = json.loads(record)
+        timestamps.append(humantime(int(record['timestamp'])))
+        for name,data in record['data'].items():
+            if name not in locations:
+                locations[name] = []
+            percent = round(float(data['available']) / float(data['total']) * 100.0,0)
+            locations[name].append(percent)
+    line.x_labels = timestamps
+    for location,data in locations.items():
+        line.add(location,data)
+    render = line.render()
+    return render_template('station_history.html',svg=render)
+
+@app.route('/history/<station>')
+def station_history(station=None):
+    if not station:
+        return "No Station Specified"
+    if not station.encode() in r.keys():
+        return "Invalid Station Specified"
+    values = r.lrange(station,0,99)
+
+    line = pygal.Line(
+        disable_xml_declaration=True,
+        style=pygal.style.NeonStyle,
+        y_title = "Available Plugs",
+        x_label_rotation = 80,
+    )
+    line.title = "Availability History for Station " + station
+    timestamps = []
+    availables = []
+    for record in reversed(values):
+        record = record.decode()
+        record = json.loads(record)
+        timestamps.append(humantime(int(record['timestamp'])))
+        availables.append(int(record['station_info']['ports_available']))
+    print(timestamps)
+    print(availables)
+
+    line.add(station,availables)
+    line.x_labels = timestamps
+    render = line.render()
+    return render_template('station_history.html',svg=render)
+
+
 
 
 if __name__ == '__main__':
-    sched.add_interval_job(update_sites,minutes=1)
+    sched.add_interval_job(update_sites,minutes=5)
     port = os.getenv('VCAP_APP_PORT', '5000')
     logging.info("Running on port " + port)
     logging.info(str(os.environ))
-    app.run(debug=False,port=int(port),host='0.0.0.0')
-
-#_--------------------------------------
+    app.run(debug=True,port=int(port),host='0.0.0.0')
