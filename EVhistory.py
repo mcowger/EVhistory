@@ -13,6 +13,16 @@ import datetime
 logging.basicConfig(level=logging.DEBUG)
 
 
+##############
+# REQUIREMENTS
+# 1) Python 2.7+, plus all the modules listed in requirements.txt
+# 2) Expects the VCAP (CloudFoundry) variables to be set....so if you run this locally as a dev instance, you'll need to set them...see below for a working example.
+# 3) A redis instance (I used redis-cloud).
+# Example for environment variables:
+# VCAP_SERVICES="{     "rediscloud": [         {             "name": "redis",             "label": "rediscloud",             "tags": [                 "key-value",                 "redis",                 "Data Store"             ],             "plan": "25mb",             "credentials": {                 "port": "16505",                 "hostname": "redis-hostname",                 "password": "redispassword"             }         }     ] }"
+# cp_user="user@chargepoint.com"
+# cp_pass="password"
+
 
 
 vcap_services = os.environ['VCAP_SERVICES']
