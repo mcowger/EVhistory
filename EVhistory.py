@@ -1,0 +1,136 @@
+from __future__ import print_function
+from flask import Flask, render_template
+from redis import StrictRedis
+import requests
+import json
+import time
+
+
+redis_db = None
+redis_password = 'y2ZUe3caAMG3LSMx'
+redis_host = 'pub-redis-16505.us-east-1-3.4.ec2.garantiadata.com'
+redis_port = 16505
+cp_user = 'matt@cowger.us'
+cp_pass = 'Habloo12'
+site="vmware"
+debug=False
+
+
+app = Flask(__name__)
+session = requests.session()
+session.headers.update(
+        {
+        'Accept':'*/*',
+        'X-Requested-With':'XMLHttpRequest',
+        'Referer':'https://na.chargepoint.com/',
+        'User-Agent':"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.76.4 (KHTML, like Gecko) Version/7.0.4 Safari/537.76.4",
+        'Host': 'na.chargepoint.com'
+        }
+)
+urls = {
+    'vmware':"https://na.chargepoint.com/dashboard/getChargeSpots?&lat=37.39931348058685&lng=-122.1379984047241&ne_lat=37.40442723948339&ne_lng=-122.11644417308042&sw_lat=37.39419937272119&sw_lng=-122.15955263636778&user_lat=37.8317378&user_lng=-122.20247309999999&search_lat=37.4418834&search_lng=-122.14301949999998&sort_by=distance&f_estimationfee=false&f_available=true&f_inuse=true&f_unknown=true&f_cp=true&f_other=false&f_l3=true&f_l2=true&f_l1=false&f_estimate=false&f_fee=true&f_free=true&f_reservable=false&f_shared=true&driver_connected_station_only=false&community_enabled_only=false&_=1403829649942",
+    'emc':"https://na.chargepoint.com/dashboard/getChargeSpots?&lat=37.38877696416435&lng=-121.97968816798402&ne_lat=37.39005561633451&ne_lng=-121.9742996100731&sw_lat=37.38749829018581&sw_lng=-121.98507672589494&user_lat=37.8317378&user_lng=-122.20247309999999&search_lat=37.388615&search_lng=-121.98040700000001&sort_by=distance&f_estimationfee=false&f_available=true&f_inuse=true&f_unknown=true&f_cp=true&f_other=false&f_l3=true&f_l2=true&f_l1=false&f_estimate=false&f_fee=true&f_free=true&f_reservable=false&f_shared=true&driver_connected_station_only=false&community_enabled_only=false&_=1403829763999"
+
+}
+garage_mapping = {
+    "PG3":"Creekside",
+    "PG1":"Hilltop",
+    "PG2":"Central"
+}
+
+r = StrictRedis(host=redis_host,port=redis_port,db=redis_db,password=redis_password)
+
+
+def do_login(cpuser,cppassword):
+    form_data = {
+        'user_name': cpuser,
+        'user_password': cppassword,
+        'recaptcha_response_field': '',
+        'timezone_offset': '480',
+        'timezone': 'PST',
+        'timezone_name': ''
+    }
+    auth = session.post(url='https://na.chargepoint.com/users/validate',data=form_data)
+    return auth.json()
+
+
+def get_stations_info(location):
+    url = urls[location]
+    station_data = session.get(url)
+    return json.loads(station_data.text)[0]['station_list']['summaries']
+
+def get_state(station_info,filter=None):
+    all_stations = []
+    for station in station_info:
+        #print(station)
+        new_station = {}
+        new_station['name'] = ".".join(station['station_name']).replace(" ",".").replace("-STATION","")
+        if filter.upper() not in new_station['name']:
+            continue
+        new_station['port_count'] = station['port_count']['total']
+        if 'available' in station['port_count']:
+            new_station['ports_available'] = station['port_count']['available']
+        else:
+            new_station['ports_available'] = 0
+        all_stations.append(new_station)
+        print(new_station)
+    return all_stations
+
+def push_data_to_db(station_data):
+    pipeline = r.pipeline()
+    for station in station_data:
+        date = int(time.time())
+        to_push = json.dumps({'timestamp': date, 'station_info':station})
+        print("Pushing: ", to_push)
+        pipeline.lpush(station['name'],to_push)
+        pipeline.ltrim(station['name'],0,1000) #ensure we dont keep more than 100 datapoints.
+    pipeline.execute()
+
+def rollup_current_data(site):
+    counts = {
+        "Creekside": {"total": 0, 'available':0},
+        "Hilltop": {"total": 0, 'available':0},
+        "Central": {"total": 0, 'available':0}
+    }
+    key_list = r.keys(site.upper()+"*")
+    raw_bytes = []
+    pipeline = r.pipeline()
+    for key in key_list:
+        info = pipeline.lrange(key,0,0)
+    for response in pipeline.execute():
+        record = json.loads(response[0].decode())
+        garage_short = record['station_info']['name'].split(".")[1]
+        garage_long = garage_mapping[garage_short]
+        ports_available_add = record['station_info']['ports_available']
+        ports_count_add = record['station_info']['port_count']
+        counts[garage_long]['total'] += ports_count_add
+        counts[garage_long]['available'] += ports_available_add
+    print(counts)
+    return counts
+
+
+
+
+@app.route('/')
+def dashboard():
+    timestamp = int(time.time())
+    last_check = int(r.get("lastcheck"))
+    delta = 600 #five minutes in seconds
+    if timestamp - last_check > 600 or debug == True: #we need to check again
+        r.set('lastcheck',timestamp)
+        auth = do_login(cp_user,cp_pass)
+        if auth['auth'] != True:
+            raise "Failed to Authenticate!"
+        station_info = get_stations_info(location=site)
+        station_data = get_state(station_info,filter=site)
+        push_data_to_db(station_data)
+    else: #Lets not pound on ChargePoint's servers too hard
+        pass
+
+
+    counts=rollup_current_data(site)
+    return render_template("default.html",counts=counts)
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
