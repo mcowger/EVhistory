@@ -2,7 +2,7 @@
 
 <head>
   <meta charset="utf-8">
-  <title>Bootstrap, from Twitter</title>
+  <title>EV Status</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="">
   <meta name="author" content="">
@@ -16,7 +16,7 @@
     <div class="row">
       <div class="col-md-12">
         <div class="page-header">
-          <h1 class="text-center">VMware EV Station Status
+          <h1 class="text-center">Federation EV Station Status
             <br>
             <small>quickly check if you can charge your car</small>
           </h1>
@@ -25,11 +25,11 @@
     </div>
     <div class="row">
       <div class="col-md-12 text-center">
-        <div class="btn-group btn-group-lg">
+        <div class="btn-group">
 
             {% for name,info in counts.items() %}
 
-                <a href="#" class="active btn btn-lg
+                <a href="#" class="active btn
                 {% if info.available > 0 %}
                 btn-success
                 {%  else %}
@@ -40,6 +40,7 @@
             {% endfor %}
 
         </div>
+      <p>(available / total)</p>
       </div>
     </div>
     <div class="row">
@@ -49,6 +50,7 @@
     </div>
     <div class="row">
       <div class="col-md-12">
+          <p class="text-center">last updated: {{ updated }}</p>
         <p class="text-center">by matt cowger (@mcowger)</p>
       </div>
     </div>
@@ -57,7 +59,16 @@
 
 
 
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
 
+  ga('create', 'UA-52370800-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
 
 </body>
 

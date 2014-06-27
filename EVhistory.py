@@ -5,20 +5,32 @@ import requests
 import json
 import time
 import os
+import logging
+import pprint
+from collections import OrderedDict
+import datetime
+
+logging.basicConfig(level=logging.DEBUG)
 
 
-rediscloud_service = json.loads(os.environ['VCAP_SERVICES'])['rediscloud-n/a'][0]
-credentials = rediscloud_service['credentials']
-cp_credentials = json.loads(os.environ['VCAP_APPLICATION'])['chargepoint'][0]
 
 
+vcap_services = os.environ['VCAP_SERVICES']
+parsed_service = json.loads(vcap_services)
+rediscloud = parsed_service['rediscloud']
+credentials = rediscloud[0]['credentials']
+
+#
+#
 redis_db = None
 redis_password = credentials['password']
 redis_host = credentials['hostname']
-redis_port =  port=credentials['port']
+redis_port = credentials['port']
+#
 
-cp_user = cp_credentials['user']
-cp_pass = cp_credentials['pass']
+cp_user = os.environ['cp_user']
+cp_pass = os.environ['cp_pass']
+
 
 site="vmware"
 debug=False
@@ -43,7 +55,8 @@ urls = {
 garage_mapping = {
     "PG3":"Creekside",
     "PG1":"Hilltop",
-    "PG2":"Central"
+    "PG2":"Central",
+    "SANTA":"EMC"
 }
 
 r = StrictRedis(host=redis_host,port=redis_port,db=redis_db,password=redis_password)
@@ -81,7 +94,7 @@ def get_state(station_info,filter=None):
         else:
             new_station['ports_available'] = 0
         all_stations.append(new_station)
-        print(new_station)
+
     return all_stations
 
 def push_data_to_db(station_data):
@@ -89,18 +102,19 @@ def push_data_to_db(station_data):
     for station in station_data:
         date = int(time.time())
         to_push = json.dumps({'timestamp': date, 'station_info':station})
-        print("Pushing: ", to_push)
+
         pipeline.lpush(station['name'],to_push)
         pipeline.ltrim(station['name'],0,1000) #ensure we dont keep more than 100 datapoints.
     pipeline.execute()
 
-def rollup_current_data(site):
-    counts = {
-        "Creekside": {"total": 0, 'available':0},
-        "Hilltop": {"total": 0, 'available':0},
-        "Central": {"total": 0, 'available':0}
-    }
-    key_list = r.keys(site.upper()+"*")
+def rollup_current_data():
+    counts = OrderedDict()
+    counts["Central"] = {"total": 0, 'available':0}
+    counts["Creekside"] = {"total": 0, 'available':0}
+    counts["Hilltop"] = {"total": 0, 'available':0}
+    counts["EMC"]  = {"total": 0, 'available':0}
+
+    key_list = r.keys("*.*")
     raw_bytes = []
     pipeline = r.pipeline()
     for key in key_list:
@@ -113,14 +127,9 @@ def rollup_current_data(site):
         ports_count_add = record['station_info']['port_count']
         counts[garage_long]['total'] += ports_count_add
         counts[garage_long]['available'] += ports_available_add
-    print(counts)
     return counts
 
-
-
-
-@app.route('/')
-def dashboard():
+def update_sites():
     timestamp = int(time.time())
     last_check = int(r.get("lastcheck"))
     delta = 600 #five minutes in seconds
@@ -134,11 +143,23 @@ def dashboard():
         push_data_to_db(station_data)
     else: #Lets not pound on ChargePoint's servers too hard
         pass
+    counts=rollup_current_data()
+    return counts
 
 
-    counts=rollup_current_data(site)
-    return render_template("default.html",counts=counts)
+@app.route('/')
+def dashboard():
+
+
+    counts = update_sites()
+    humantime = datetime.datetime.fromtimestamp(int(r.get("lastcheck"))).strftime("%Y-%m-%d %H:%M:%S")
+    return render_template("default.html",counts=counts,updated=humantime)
+
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = os.getenv('VCAP_APP_PORT', '5000')
+    logging.info("Running on port " + port)
+    logging.info(str(os.environ))
+    app.run(debug=False,port=int(port),host='0.0.0.0')
 
+#_--------------------------------------
