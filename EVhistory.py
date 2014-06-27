@@ -9,6 +9,7 @@ import logging
 import pprint
 from collections import OrderedDict
 import datetime
+from apscheduler.scheduler import Scheduler
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -41,9 +42,11 @@ redis_port = credentials['port']
 cp_user = os.environ['cp_user']
 cp_pass = os.environ['cp_pass']
 
-
-site="vmware"
 debug=False
+
+sched = Scheduler()
+sched.start()
+
 
 
 app = Flask(__name__)
@@ -87,16 +90,20 @@ def do_login(cpuser,cppassword):
 
 def get_stations_info(location):
     url = urls[location]
+    logging.debug("Getting Data for " + location + " from " + url)
     station_data = session.get(url)
     return json.loads(station_data.text)[0]['station_list']['summaries']
 
 def get_state(station_info,filter=None):
     all_stations = []
     for station in station_info:
+
         #print(station)
         new_station = {}
         new_station['name'] = ".".join(station['station_name']).replace(" ",".").replace("-STATION","")
+        logging.debug("Processing Station " + new_station['name'])
         if filter.upper() not in new_station['name']:
+            logging.debug("Station " + new_station['name'] + " was the wrong prefix")
             continue
         new_station['port_count'] = station['port_count']['total']
         if 'available' in station['port_count']:
@@ -104,6 +111,7 @@ def get_state(station_info,filter=None):
         else:
             new_station['ports_available'] = 0
         all_stations.append(new_station)
+        logging.debug("Added new station to the list: " + str(new_station))
 
     return all_stations
 
@@ -112,7 +120,7 @@ def push_data_to_db(station_data):
     for station in station_data:
         date = int(time.time())
         to_push = json.dumps({'timestamp': date, 'station_info':station})
-
+        logging.debug("Pushing to Redis:" + to_push)
         pipeline.lpush(station['name'],to_push)
         pipeline.ltrim(station['name'],0,1000) #ensure we dont keep more than 100 datapoints.
     pipeline.execute()
@@ -141,32 +149,29 @@ def rollup_current_data():
 
 def update_sites():
     timestamp = int(time.time())
-    last_check = int(r.get("lastcheck"))
-    delta = 600 #five minutes in seconds
-    if timestamp - last_check > 600 or debug == True: #we need to check again
-        r.set('lastcheck',timestamp)
-        auth = do_login(cp_user,cp_pass)
-        if auth['auth'] != True:
-            raise "Failed to Authenticate!"
+    auth = do_login(cp_user,cp_pass)
+    if auth['auth'] != True:
+        raise "Failed to Authenticate!"
+    for site,url in urls.items():
+        logging.debug("Beginning for site: " + site)
         station_info = get_stations_info(location=site)
         station_data = get_state(station_info,filter=site)
         push_data_to_db(station_data)
-    else: #Lets not pound on ChargePoint's servers too hard
-        pass
-    counts=rollup_current_data()
-    return counts
+    r.set('lastcheck',timestamp)
+
 
 
 @app.route('/')
 def dashboard():
 
 
-    counts = update_sites()
+    counts=rollup_current_data()
     humantime = datetime.datetime.fromtimestamp(int(r.get("lastcheck"))).strftime("%Y-%m-%d %H:%M:%S")
     return render_template("default.html",counts=counts,updated=humantime)
 
 
 if __name__ == '__main__':
+    sched.add_interval_job(update_sites,minutes=1)
     port = os.getenv('VCAP_APP_PORT', '5000')
     logging.info("Running on port " + port)
     logging.info(str(os.environ))

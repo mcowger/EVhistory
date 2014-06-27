@@ -5,3 +5,4 @@ Werkzeug==0.9.6
 itsdangerous==0.24
 redis==2.10.1
 requests==2.3.0
+APScheduler==2.1.2
