@@ -29,13 +29,13 @@
 
             {% for name,info in counts.items() %}
 
-                <a href="/averages" class="active btn
+                <a href="#" class="active btn
                 {% if info.available > 0 %}
                 btn-success
                 {%  else %}
                 brn-danger
                 {% endif %}
-                "> {{ name }}<br/>({{ info.available }}/{{info.total}}) </a>
+                "> {{ name }}<br/>({{ info.available }}/{{info.total}}) <br/><b>{{ info.percent }}%</b></a>
 
             {% endfor %}
 
@@ -50,6 +50,7 @@
     </div>
     <div class="row">
       <div class="col-md-12">
+          <p class="text-center">special message: {{ message }}</p>
           <p class="text-center">last updated: {{ updated }}</p>
           <p class="text-center">server time:  {{ currenttime }}</p>
 
