@@ -5,6 +5,7 @@ import os
 import logging
 import datetime
 from collections import OrderedDict
+from pprint import pformat
 
 from flask import Flask, render_template
 import requests
@@ -13,15 +14,22 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Float, desc
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
+from sqlalchemy.exc import InvalidRequestError
 import newrelic.agent
+from config import Config
+
+
+config_file = os.environ['CONFIG_FILE']
+cfg = Config(open(config_file))
+
+
 
 newrelic.agent.initialize('newrelic.ini')
 
-
 logging.basicConfig(level=logging.DEBUG)
+
 Base = declarative_base()
 Session = sessionmaker()
-
 
 class StationTimeSeriesRecord(Base):
     __tablename__ = 'station_timeseries'
@@ -54,25 +62,24 @@ class SpecialMessage(Base):
        return "<SpecialMessage Record (timestamp=%s message=%s)>" % (self.timestamp, self.message)
 
 
-##############
-# REQUIREMENTS
-# 1) Python 2.7+, plus all the modules listed in requirements.txt
-# 2) Expects the VCAP (CloudFoundry) variables to be set....so if you run this locally as a dev instance, you'll need to set them...see below for a working example.
+elephant_url = cfg.sql_url
+cp_user = cfg.cp_user
+cp_pass = cfg.cp_pass
 
-services = json.loads(os.environ['VCAP_SERVICES'])
-elephantsql = services['elephantsql']
-elephant_url = elephantsql[0]['credentials']['uri']
 
-cp_user = os.environ['cp_user']
-cp_pass = os.environ['cp_pass']
+if 'VCAP_SERVICES' in os.environ:
+    services = json.loads(os.environ['VCAP_SERVICES'])
+    elephantsql = services['elephantsql']
+    elephant_url = elephantsql[0]['credentials']['uri']
+    logging.basicConfig(level=logging.CRITICAL)
+
 
 sched = Scheduler()
 sched.start()
 
+engine = create_engine(elephant_url)
 
-engine = create_engine('postgres://cvepxgvj:4oXkHJk_BMR601gUBg4CAmM5P3lEkkcn@babar.elephantsql.com:5432/cvepxgvj', echo=True)
 Session.configure(bind=engine)  # once engine is available
-session = Session()
 
 Base.metadata.create_all(engine)
 
@@ -82,26 +89,9 @@ min_cache_interval = 30
 
 app = Flask(__name__)
 cpsession = requests.session()
-cpsession.headers.update(
-        {
-        'Accept':'*/*',
-        'X-Requested-With':'XMLHttpRequest',
-        'Referer':'https://na.chargepoint.com/',
-        'User-Agent':"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.76.4 (KHTML, like Gecko) Version/7.0.4 Safari/537.76.4",
-        'Host': 'na.chargepoint.com'
-        }
-)
-urls = {
-    'vmware':"https://na.chargepoint.com/dashboard/getChargeSpots?&lat=37.39931348058685&lng=-122.1379984047241&ne_lat=37.40442723948339&ne_lng=-122.11644417308042&sw_lat=37.39419937272119&sw_lng=-122.15955263636778&user_lat=37.8317378&user_lng=-122.20247309999999&search_lat=37.4418834&search_lng=-122.14301949999998&sort_by=distance&f_estimationfee=false&f_available=true&f_inuse=true&f_unknown=true&f_cp=true&f_other=false&f_l3=true&f_l2=true&f_l1=false&f_estimate=false&f_fee=true&f_free=true&f_reservable=false&f_shared=true&driver_connected_station_only=false&community_enabled_only=false&_=1403829649942",
-    'emc':"https://na.chargepoint.com/dashboard/getChargeSpots?&lat=37.38877696416435&lng=-121.97968816798402&ne_lat=37.39005561633451&ne_lng=-121.9742996100731&sw_lat=37.38749829018581&sw_lng=-121.98507672589494&user_lat=37.8317378&user_lng=-122.20247309999999&search_lat=37.388615&search_lng=-121.98040700000001&sort_by=distance&f_estimationfee=false&f_available=true&f_inuse=true&f_unknown=true&f_cp=true&f_other=false&f_l3=true&f_l2=true&f_l1=false&f_estimate=false&f_fee=true&f_free=true&f_reservable=false&f_shared=true&driver_connected_station_only=false&community_enabled_only=false&_=1403829763999"
-
-}
-garage_mapping = {
-    "PG3":"Creekside",
-    "PG1":"Hilltop",
-    "PG2":"Central",
-    "SANTA":"EMC"
-}
+cpsession.headers.update(cfg.chargepoint_session_headers)
+urls = cfg.urls
+garage_mapping = cfg.garage_mapping
 
 
 
@@ -181,6 +171,7 @@ def push_to_db():
     Pushes the current info into the DB.
 
     """
+    session = Session()
     do_login(cp_user,cp_pass)
     timestamp = int(time.time())
     all_locations = []
@@ -198,7 +189,14 @@ def push_to_db():
         garage_hint = record.station_name.split('.')[1]
         record.garage = garage_mapping[garage_hint]
         session.add(record)
-    session.commit()
+    try:
+        session.commit()
+    except InvalidRequestError, e:
+        session.rollback()
+        raise(e)
+    finally:
+        session.close()
+
 
 def gen_live_counts():
     """
@@ -206,6 +204,7 @@ def gen_live_counts():
 
     :return: :rtype: OrderedDict
     """
+    session = Session()
     global cached_counts
     global cached_counts_time
     #Lets check for a cached version first
@@ -227,7 +226,7 @@ def gen_live_counts():
         counts[record.garage]['available'] += record.available
         counts[record.garage]['percent'] += record.percent
 
-
+    session.close()
     cached_counts=counts
     cached_counts_time=current_time()
     return counts
@@ -239,9 +238,11 @@ def get_history_for_station(station_name, limit=100):
     :param limit: int
     :return: :rtype: list
     """
+    session = Session()
     to_return = []
     for record in session.query(StationTimeSeriesRecord).filter_by(station_name=station_name).order_by(desc(StationTimeSeriesRecord.timestamp)).limit(limit):
         to_return.append(record)
+    session.close()
     return to_return
 
 def get_history_for_garage(garage,limit=100):
@@ -250,16 +251,20 @@ def get_history_for_garage(garage,limit=100):
     :param garage: string
     :param limit: int
     """
+    session = Session()
     for record in session.query(GarageCurrentSummary).filter_by(garage=garage).order_by(desc(GarageCurrentSummary.timestamp)):
         print(record)
+    session.close()
 
 
 @app.route('/', defaults={'forceupdate': ""})
 @app.route('/<forceupdate>')
 def dashboard(forceupdate):
+    session = Session()
     if forceupdate == 'forceupdate':
         push_to_db()
     message = session.query(SpecialMessage).order_by(desc(SpecialMessage.timestamp)).limit(1)[0].message
+    session.close()
     return render_template('default.html',counts=gen_live_counts(),currenttime=humantime(current_time()),updated=humantime(cached_counts_time),message=message)
 
 @app.route('/garagehistory/<garage_name>')
@@ -271,6 +276,10 @@ def display_garage_history(garage_name):
 def display_station_history(station_name):
     get_history_for_station(station_name,limit=100)
     return ""
+
+@app.route('/config')
+def config():
+    return render_template('minimal.html',message=pformat(os.environ,indent=4))
 
 if __name__ == '__main__':
     sched.add_interval_job(push_to_db,minutes=2)
