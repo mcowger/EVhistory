@@ -6,6 +6,7 @@ import logging
 import datetime
 from collections import OrderedDict
 from pprint import pformat
+
 from dateutil import tz
 from flask import Flask, render_template
 import requests
@@ -158,10 +159,10 @@ def humantime(timestamp):
     assert timestamp > 0
     from_zone = tz.gettz('UTC')
     to_zone = tz.gettz('America/Los_Angeles')
-    utc = datetime.datetime.fromtimestamp(timestamp)
-
-    return utc.strftime("%a, %d %b %Y %H:%M:%S")
-
+    utc = datetime.datetime.fromtimestamp(timestamp).replace()
+    utc = utc.replace(tzinfo=from_zone)
+    pacific = utc.astimezone(to_zone)
+    return pacific.strftime("%a, %d %b %Y %H:%M:%S")
 
 def current_time():
     """
@@ -229,7 +230,7 @@ def gen_live_counts():
             counts[record.garage] = {'total': 0, 'available':0, 'percent': 0}
         counts[record.garage]['total'] += record.total
         counts[record.garage]['available'] += record.available
-        counts[record.garage]['percent'] += record.percent
+        counts[record.garage]['percent'] += int(record.percent)
 
     session.close()
     cached_counts=counts
