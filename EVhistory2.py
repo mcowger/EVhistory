@@ -6,7 +6,7 @@ import logging
 import datetime
 from collections import OrderedDict
 from pprint import pformat
-
+from dateutil import tz
 from flask import Flask, render_template
 import requests
 from apscheduler.scheduler import Scheduler
@@ -85,7 +85,7 @@ Base.metadata.create_all(engine)
 
 cached_counts = OrderedDict()
 cached_counts_time = 0
-min_cache_interval = 30
+min_cache_interval = 300
 
 app = Flask(__name__)
 cpsession = requests.session()
@@ -156,7 +156,12 @@ def humantime(timestamp):
     :return: :rtype: string
     """
     assert timestamp > 0
-    return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    from_zone = tz.gettz('UTC')
+    to_zone = tz.gettz('America/Los_Angeles')
+    utc = datetime.datetime.fromtimestamp(timestamp)
+
+    return utc.strftime("%a, %d %b %Y %H:%M:%S")
+
 
 def current_time():
     """
