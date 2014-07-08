@@ -8,7 +8,7 @@ from collections import OrderedDict
 from pprint import pformat
 
 from dateutil import tz
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 import requests
 from apscheduler.scheduler import Scheduler
 from sqlalchemy.ext.declarative import declarative_base
@@ -20,10 +20,7 @@ import newrelic.agent
 from config import Config
 
 
-config_file = os.environ['CONFIG_FILE']
-cfg = Config(open(config_file))
-
-
+cfg = Config(open(os.environ['CONFIG_FILE']))
 
 newrelic.agent.initialize('newrelic.ini')
 
@@ -199,10 +196,9 @@ def push_to_db():
         session.commit()
     except InvalidRequestError, e:
         session.rollback()
-        raise(e)
+        raise e
     finally:
         session.close()
-
 
 def gen_live_counts():
     """
@@ -234,7 +230,7 @@ def gen_live_counts():
 
     session.close()
     cached_counts=counts
-    cached_counts_time=current_time()
+    cached_counts_time=most_recent_timestamp
     return counts
 
 def get_history_for_station(station_name, limit=100):
@@ -262,6 +258,24 @@ def get_history_for_garage(garage,limit=100):
         print(record)
     session.close()
 
+@app.route('/message',methods=['POST', 'GET'])
+def add_message():
+    if request.method == 'POST':
+        if 'message' in request.form:
+            session = Session()
+            record = SpecialMessage()
+            record.timestamp = current_time()
+            record.message = request.form['message']
+            session.add(record)
+            try:
+                session.commit()
+            except InvalidRequestError, e:
+                session.rollback()
+                raise e
+            finally:
+                session.close()
+
+    return render_template('addupdate.html')
 
 @app.route('/', defaults={'forceupdate': ""})
 @app.route('/<forceupdate>')
