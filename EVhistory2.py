@@ -6,6 +6,7 @@ import logging
 import datetime
 from collections import OrderedDict
 from pprint import pformat
+import copy
 
 from dateutil import tz
 from flask import Flask, render_template, request
@@ -59,11 +60,9 @@ class SpecialMessage(Base):
     def __repr__(self):
        return "<SpecialMessage Record (timestamp=%s message=%s)>" % (self.timestamp, self.message)
 
-
 elephant_url = cfg.sql_url
 cp_user = cfg.cp_user
 cp_pass = cfg.cp_pass
-
 
 if 'VCAP_SERVICES' in os.environ:
     services = json.loads(os.environ['VCAP_SERVICES'])
@@ -206,7 +205,7 @@ def gen_live_counts():
 
     :return: :rtype: OrderedDict
     """
-    session = Session()
+
     global cached_counts
     global cached_counts_time
     #Lets check for a cached version first
@@ -216,7 +215,7 @@ def gen_live_counts():
         return cached_counts
 
     #otherwise, actually go get the data
-
+    session = Session()
     most_recent_timestamp = 0
     for record in session.query(StationTimeSeriesRecord).order_by(desc(StationTimeSeriesRecord.timestamp)).limit(1):
         most_recent_timestamp = record.timestamp
@@ -229,7 +228,7 @@ def gen_live_counts():
         counts[record.garage]['percent'] += int(record.percent)
 
     session.close()
-    cached_counts=counts
+    cached_counts=copy.deepcopy(counts)
     cached_counts_time=most_recent_timestamp
     return counts
 

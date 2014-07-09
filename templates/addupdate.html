@@ -18,7 +18,7 @@
         <div class="page-header">
           <h1 class="text-center">Federation EV Station Status
             <br>
-            <small>quickly check if you can charge your car</small>
+            <small>message update</small>
           </h1>
         </div>
       </div>
@@ -27,19 +27,26 @@
       <div class="col-md-12 text-center">
         <div class="btn-group">
 
-            {% for name,info in counts.items() %}
+            <form class="form-horizontal" action="/message" method="post" >
+                <fieldset>
 
-                <a href="#" class="active btn
-                {% if info.available > 0 %}
-                btn-success
-                {%  else %}
-                brn-danger
-                {% endif %}
-                "><small>{{ name }}</small><br/>({{ info.available }}/{{info.total}})<br/><b>{{ info.percent }}%</b></a>
-            {% endfor %}
+                <!-- Form Name -->
+                <legend>Message Setting Interface</legend>
+
+                <!-- Text input-->
+                <div class="control-group">
+                  <label class="control-label" for="message">Message</label>
+                  <div class="controls">
+                    <input id="message" name="message" type="text" placeholder="None" class="input-xlarge" required="">
+                    <p class="help-block">Message to Set</p>
+                  </div>
+                </div>
+
+                </fieldset>
+            </form>
+
 
         </div>
-      <p>(available / total)</p>
       </div>
     </div>
     <div class="row">
@@ -49,10 +56,6 @@
     </div>
     <div class="row">
       <div class="col-md-12">
-          <p class="text-center">special message: {{ message }}</p>
-          <p class="text-center">last updated: {{ updated }}<br/>
-          server time:  {{ currenttime }}</p>
-
         <p class="text-center">by matt cowger (@mcowger)</p>
       </div>
     </div>
