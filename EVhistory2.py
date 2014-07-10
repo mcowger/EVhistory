@@ -6,7 +6,6 @@ import logging
 import datetime
 from collections import OrderedDict
 from pprint import pformat
-import copy
 
 from dateutil import tz
 from flask import Flask, render_template, request
@@ -18,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 from sqlalchemy.exc import InvalidRequestError
 import newrelic.agent
+from flask.ext.cache import Cache
 from config import Config
 
 
@@ -25,7 +25,7 @@ cfg = Config(open(os.environ['CONFIG_FILE']))
 
 newrelic.agent.initialize('newrelic.ini')
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 Base = declarative_base()
 Session = sessionmaker()
@@ -68,11 +68,12 @@ if 'VCAP_SERVICES' in os.environ:
     services = json.loads(os.environ['VCAP_SERVICES'])
     elephantsql = services['elephantsql']
     elephant_url = elephantsql[0]['credentials']['uri']
-    logging.basicConfig(level=logging.CRITICAL)
+    logging.basicConfig(level=logging.INFO)
+
+logging.info("Using database: %s" % elephant_url)
 
 
-sched = Scheduler()
-sched.start()
+
 
 engine = create_engine(elephant_url)
 
@@ -80,11 +81,11 @@ Session.configure(bind=engine)  # once engine is available
 
 Base.metadata.create_all(engine)
 
-cached_counts = OrderedDict()
-cached_counts_time = 0
-min_cache_interval = 300
+
 
 app = Flask(__name__)
+cache = Cache(app,config={'CACHE_TYPE': 'simple'})
+
 cpsession = requests.session()
 cpsession.headers.update(cfg.chargepoint_session_headers)
 urls = cfg.urls
@@ -173,6 +174,7 @@ def push_to_db():
     Pushes the current info into the DB.
 
     """
+    time.sleep(2)
     session = Session()
     do_login(cp_user,cp_pass)
     timestamp = int(time.time())
@@ -199,6 +201,7 @@ def push_to_db():
     finally:
         session.close()
 
+@cache.cached(timeout=120, key_prefix='gen_live_counts')
 def gen_live_counts():
     """
     Returns a cached or live copy of the per-garage counts.
@@ -206,21 +209,13 @@ def gen_live_counts():
     :return: :rtype: OrderedDict
     """
 
-    global cached_counts
-    global cached_counts_time
-    #Lets check for a cached version first
-    if current_time() - min_cache_interval < cached_counts_time:
-        #we are within our cache window, so lets return the previous one
-        logging.info("Returning Cached counts...")
-        return cached_counts
-
-    #otherwise, actually go get the data
     session = Session()
     most_recent_timestamp = 0
     for record in session.query(StationTimeSeriesRecord).order_by(desc(StationTimeSeriesRecord.timestamp)).limit(1):
         most_recent_timestamp = record.timestamp
     counts = OrderedDict()
     for record in session.query(GarageCurrentSummary).filter_by(timestamp=most_recent_timestamp).order_by(GarageCurrentSummary.garage):
+        logging.info(record)
         if record.garage not in counts:
             counts[record.garage] = {'total': 0, 'available':0, 'percent': 0}
         counts[record.garage]['total'] += record.total
@@ -228,9 +223,7 @@ def gen_live_counts():
         counts[record.garage]['percent'] += int(record.percent)
 
     session.close()
-    cached_counts=copy.deepcopy(counts)
-    cached_counts_time=most_recent_timestamp
-    return counts
+    return (most_recent_timestamp,counts)
 
 def get_history_for_station(station_name, limit=100):
     """
@@ -276,15 +269,14 @@ def add_message():
 
     return render_template('addupdate.html')
 
-@app.route('/', defaults={'forceupdate': ""})
-@app.route('/<forceupdate>')
-def dashboard(forceupdate):
+@app.route('/')
+def dashboard():
     session = Session()
-    if forceupdate == 'forceupdate':
-        push_to_db()
     message = session.query(SpecialMessage).order_by(desc(SpecialMessage.timestamp)).limit(1)[0].message
     session.close()
-    return render_template('default.html',counts=gen_live_counts(),currenttime=humantime(current_time()),updated=humantime(cached_counts_time),message=message)
+    ts = gen_live_counts()[0]
+    counts = gen_live_counts()[1]
+    return render_template('default.html',counts=counts,currenttime=humantime(current_time()),updated=humantime(ts),message=message)
 
 @app.route('/garagehistory/<garage_name>')
 def display_garage_history(garage_name):
@@ -301,8 +293,10 @@ def config():
     return render_template('minimal.html',message=pformat(os.environ,indent=4))
 
 if __name__ == '__main__':
-    sched.add_interval_job(push_to_db,minutes=2)
+    sched = Scheduler()
+    sched.start()
+    sched.add_interval_job(push_to_db,minutes=1,max_instances=1)
     port = os.getenv('VCAP_APP_PORT', '5000')
     logging.info("Running on port " + port)
     logging.info(str(os.environ))
-    app.run(debug=True,port=int(port),host='0.0.0.0')
+    app.run(debug=False,port=int(port),host='0.0.0.0')
