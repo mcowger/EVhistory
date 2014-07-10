@@ -19,6 +19,8 @@ from sqlalchemy.exc import InvalidRequestError
 import newrelic.agent
 from flask.ext.cache import Cache
 from config import Config
+from flask_debugtoolbar import DebugToolbarExtension
+from flask_debugtoolbar_lineprofilerpanel.profile import line_profile
 
 
 cfg = Config(open(os.environ['CONFIG_FILE']))
@@ -64,12 +66,18 @@ elephant_url = cfg.sql_url
 cp_user = cfg.cp_user
 cp_pass = cfg.cp_pass
 
+
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'blah'
+app.debug = True
+
 if 'VCAP_SERVICES' in os.environ:
     services = json.loads(os.environ['VCAP_SERVICES'])
     elephantsql = services['elephantsql']
     elephant_url = elephantsql[0]['credentials']['uri']
     logging.basicConfig(level=logging.INFO)
-
+    app.debug = False
 logging.info("Using database: %s" % elephant_url)
 
 
@@ -83,8 +91,8 @@ Base.metadata.create_all(engine)
 
 
 
-app = Flask(__name__)
 cache = Cache(app,config={'CACHE_TYPE': 'simple'})
+toolbar = DebugToolbarExtension(app)
 
 cpsession = requests.session()
 cpsession.headers.update(cfg.chargepoint_session_headers)
@@ -199,6 +207,7 @@ def push_to_db():
         session.rollback()
         raise e
     finally:
+        cache.clear()
         session.close()
 
 @cache.cached(timeout=120, key_prefix='gen_live_counts')
@@ -250,6 +259,13 @@ def get_history_for_garage(garage,limit=100):
         print(record)
     session.close()
 
+@cache.cached(timeout=600, key_prefix='get_message')
+def get_message():
+    session = Session()
+    message = session.query(SpecialMessage).order_by(desc(SpecialMessage.timestamp)).limit(1)[0].message
+    session.close()
+    return message
+
 @app.route('/message',methods=['POST', 'GET'])
 def add_message():
     if request.method == 'POST':
@@ -267,16 +283,15 @@ def add_message():
             finally:
                 session.close()
 
+    cache.clear()
     return render_template('addupdate.html')
 
 @app.route('/')
+@line_profile
 def dashboard():
-    session = Session()
-    message = session.query(SpecialMessage).order_by(desc(SpecialMessage.timestamp)).limit(1)[0].message
-    session.close()
     ts = gen_live_counts()[0]
     counts = gen_live_counts()[1]
-    return render_template('default.html',counts=counts,currenttime=humantime(current_time()),updated=humantime(ts),message=message)
+    return render_template('default.html',counts=counts,currenttime=humantime(current_time()),updated=humantime(ts),message=get_message())
 
 @app.route('/garagehistory/<garage_name>')
 def display_garage_history(garage_name):
@@ -299,4 +314,4 @@ if __name__ == '__main__':
     port = os.getenv('VCAP_APP_PORT', '5000')
     logging.info("Running on port " + port)
     logging.info(str(os.environ))
-    app.run(debug=False,port=int(port),host='0.0.0.0')
+    app.run(port=int(port),host='0.0.0.0')
